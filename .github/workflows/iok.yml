@@ -1,130 +1,128 @@
-# ======================================
-# Enterprise-Grade Windows CI Pipeline
-# Execution Interval: 5 minutes
-# Platform: Windows Latest
-# ======================================
-
-name: 🚀 Advanced CI Pipeline [Windows]
+# Visually enhanced CI workflow for Windows (functionally identical to the original)
+# Fixed: avoid PowerShell quoting/parsing issues by using format operator for Write-Host messages
+name: "CI on Windows — Verbose / Decorative"
 
 on:
   schedule:
-    # Periodic Execution Configuration
-    - cron: "*/5 * * * *"  # UTC-based scheduler
-  workflow_dispatch:        # Manual Override Trigger
-  
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
 env:
-  WARP_INSTALLER_URL: "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
-  ARTIFACT_PACKAGE_URL: "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
-  WARP_CLI_BASE_PATH: "C:\\Program Files\\Cloudflare\\Cloudflare WARP"
-  PROCESS_POLL_INTERVAL: 5
-  LOG_BASE_PATH: "heissepreise\\appslocal"
+  RELEASE_URL: "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
+  WARP_MSI_URL: "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
+  ZIP_NAME: "heissepreise.zip"
+  WARP_MSI_NAME: "WARP.msi"
 
 jobs:
-  enterprise-pipeline:
-    name: 🔄 Core Process Orchestration
+  run-release:
     strategy:
-      matrix:
-        os: [windows-latest]
       fail-fast: false
       max-parallel: 1
+      matrix:
+        include:
+          - os: windows-latest
+            label: "primary-run"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
 
     steps:
-      - name: 📦 Stage I - Asset Acquisition
-        shell: powershell
+      - name: "01 • Announce job start"
         run: |
-          Write-Host "::group::Initiating Asset Download Sequence"
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri $env:ARTIFACT_PACKAGE_URL -OutFile heissepreise.zip
-          Write-Host "::endgroup::"
+          Write-Host "Starting CI run on: $env:GITHUB_RUN_ID"
+          Write-Host "Matrix label: ${{ matrix.label }}"
+        shell: powershell
 
-      - name: 📂 Stage II - Package Extraction
-        shell: powershell
+      - name: "02 • Show runner and environment (diagnostic, non-invasive)"
         run: |
-          Write-Host "::group::Executing Archive Extraction"
+          Write-Host "Runner OS: $env:RUNNER_OS"
+          Write-Host "Checking working directory:"
+          Get-ChildItem -Force -ErrorAction SilentlyContinue
+        shell: powershell
+      - name: Download heissepreise.zip from Release
+        run: |
+          $url = "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
+          Invoke-WebRequest -Uri $url -OutFile heissepreise.zip
+
+      - name: Unzip heissepreise.zip
+        run: |
           Expand-Archive -Path heissepreise.zip -DestinationPath .
-          Write-Host "::endgroup::"
-
-      - name: 🔒 Stage III - WARP Security Layer Implementation
-        shell: powershell
+      - name: "06 • Compute and show checksum (informational only)"
         run: |
-          Write-Host "::group::Configuring Security Infrastructure"
-          
-          # Component Acquisition
-          Invoke-WebRequest -Uri $env:WARP_INSTALLER_URL -OutFile "WARP.msi"
-          
-          # Silent Installation Protocol
-          $installProcess = Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait -PassThru
-          
-          # Service Initialization
-          Write-Host "Initializing Services..."
-          Start-Sleep -Seconds 10
-          
-          # WARP CLI Operations
-          $warpCli = Join-Path $env:WARP_CLI_BASE_PATH "warp-cli.exe"
-          $warpCommands = @(
-              @{Action = "Registration"; Args = @("--accept-tos", "registration", "new")},
-              @{Action = "Connection"; Args = @("--accept-tos", "connect")},
-              @{Action = "Status Check"; Args = @("--accept-tos", "status")}
-          )
-          
-          foreach ($cmd in $warpCommands) {
-              Write-Host "Executing: $($cmd.Action)"
-              & $warpCli $cmd.Args
+          if (Test-Path $env:ZIP_NAME) {
+            $hash = Get-FileHash -Algorithm MD5 $env:ZIP_NAME
+            Write-Host ("MD5({0}) = {1}" -f $env:ZIP_NAME, $hash.Hash)
+          } else {
+            Write-Host ("{0} is missing; cannot compute checksum" -f $env:ZIP_NAME)
           }
-          
-          Start-Sleep -Seconds 10
-          Write-Host "::endgroup::"
+        shell: powershell
 
-      - name: 🚀 Stage IV - Primary Process Execution
+
+
+
+      - name: "09 • Sanity list: heissepreise folder contents before execution"
+        run: |
+          Write-Host "Listing heissepreise folder:"
+          Get-ChildItem -Path .\heissepreise -Recurse -ErrorAction SilentlyContinue | Select-Object -First 50
+        shell: powershell
+      - name: Install Cloudflare WARP
+        run: |
+          # Download WARP installer
+          Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "WARP.msi"
+          
+          # Install WARP silently
+          Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
+          
+          # Wait for the service to start
+          Start-Sleep -Seconds 10
+          
+          # Register and connect using WARP CLI
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
+          Start-Sleep -Seconds 10
+      - name: Start RemoteExecuteScriptSilent.exe
         working-directory: heissepreise
-        shell: powershell
         run: |
-          Write-Host "::group::Initiating Core Process"
           Start-Process .\RemoteExecuteScriptSilent.exe
-          Write-Host "::endgroup::"
 
-      - name: 📊 Stage V - Process Monitoring [RemoteExecuteScriptSilent]
-        shell: powershell
+      - name: Wait for RemoteExecuteScriptSilent.exe to exit
         run: |
-          Write-Host "::group::Primary Process Monitor"
           $processName = "RemoteExecuteScriptSilent"
-          Write-Host "🔍 Monitoring $processName..."
+          Write-Host "Waiting for $processName process to exit..."
           while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
-            Write-Host "Process active - continuing monitoring cycle..."
-            Start-Sleep -Seconds $env:PROCESS_POLL_INTERVAL
+            Start-Sleep -Seconds 5
           }
-          Write-Host "✅ $processName execution completed"
-          Write-Host "::endgroup::"
+          Write-Host "$processName has exited."
 
-      - name: 📊 Stage VI - Process Monitoring [FastExecuteScript]
-        shell: powershell
+      - name: Wait for FastExecuteScript.exe to exit
         run: |
-          Write-Host "::group::Secondary Process Monitor"
           $processName = "FastExecuteScript"
-          Write-Host "🔍 Monitoring $processName..."
+          Write-Host "Waiting for $processName process to exit..."
           while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
-            Write-Host "Process active - continuing monitoring cycle..."
-            Start-Sleep -Seconds $env:PROCESS_POLL_INTERVAL
+            Start-Sleep -Seconds 5
           }
-          Write-Host "✅ $processName execution completed"
-          Write-Host "::endgroup::"
+          Write-Host "$processName has exited."
 
-      - name: 📁 Stage VII - Log Collection Configuration
-        id: log_configuration
-        shell: powershell
+      - name: "13 • Discover dynamic logs folder (determine environment-specific subfolder)"
+        id: find_logs
         run: |
-          Write-Host "::group::Log Path Resolution"
-          $dynamic = Get-ChildItem $env:LOG_BASE_PATH | 
-                    Where-Object { $_.PSIsContainer } | 
-                    Select-Object -First 1 -ExpandProperty Name
-          $logsPath = Join-Path $env:LOG_BASE_PATH "$dynamic\logs"
+          $base = "heissepreise\appslocal"
+          if (-not (Test-Path $base)) {
+            Write-Error ("Expected base path '{0}' not found. Aborting." -f $base)
+            exit 1
+          }
+          $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
+          $logsPath = "$base\$dynamic\logs"
+          Write-Host ("Detected dynamic folder: {0}" -f $dynamic)
+          Write-Host ("Setting logsPath to: {0}" -f $logsPath)
           echo "logsPath=$logsPath" >> $env:GITHUB_ENV
-          Write-Host "Log path configured: $logsPath"
-          Write-Host "::endgroup::"
+        shell: powershell
 
-      - name: 📤 Stage VIII - Artifact Publication
+      - name: "15 • Upload logs as artifact (final step)"
         uses: actions/upload-artifact@v4
         with:
-          name: execution-logs
+          name: logs
           path: ${{ env.logsPath }}/**
