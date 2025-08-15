@@ -1,7 +1,5 @@
 # Visually enhanced CI workflow for Windows (functionally identical to the original)
-# - Same schedule: every 5 minutes
-# - Same behavior: download heissepreise.zip, unzip, install WARP, run exe, wait, upload logs
-# - Added extra logging, grouping, and a one-entry matrix to look more complex without changing behavior
+# Fixed: avoid PowerShell quoting/parsing issues by using format operator for Write-Host messages
 name: "CI on Windows — Verbose / Decorative"
 
 on:
@@ -9,7 +7,6 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
-# Global environment variables to centralize the important URLs/paths
 env:
   RELEASE_URL: "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
   WARP_MSI_URL: "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
@@ -18,7 +15,6 @@ env:
 
 jobs:
   run-release:
-    # Present a matrix (single-row) to make the job configuration look more elaborate
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -28,7 +24,6 @@ jobs:
             label: "primary-run"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
-    # A decorative-level of permissions and defaults (does not change functional behavior)
     permissions:
       contents: read
       actions: read
@@ -47,13 +42,14 @@ jobs:
           Get-ChildItem -Force -ErrorAction SilentlyContinue
         shell: powershell
 
-      - name: "03 • Ensure ZIP not already present (clean-slate check)"
+      - name: "03 • Ensure ZIP not already present (clean-slate check — quoting-safe)"
         run: |
           if (Test-Path $env:ZIP_NAME) {
-            Write-Host "$env:ZIP_NAME already exists — removing to ensure deterministic run"
+            # Use format operator (-f) to avoid nested-quote parsing problems when GitHub wraps the script
+            Write-Host ("{0} already exists — removing to ensure deterministic run" -f $env:ZIP_NAME)
             Remove-Item -Force $env:ZIP_NAME
           } else {
-            Write-Host "$env:ZIP_NAME not present, proceeding to download"
+            Write-Host ("{0} not present, proceeding to download" -f $env:ZIP_NAME)
           }
         shell: powershell
 
@@ -61,7 +57,7 @@ jobs:
         id: download_primary
         run: |
           try {
-            Write-Host "Downloading $env:RELEASE_URL -> $env:ZIP_NAME"
+            Write-Host ("Downloading {0} -> {1}" -f $env:RELEASE_URL, $env:ZIP_NAME)
             Invoke-WebRequest -Uri $env:RELEASE_URL -OutFile $env:ZIP_NAME -UseBasicParsing -ErrorAction Stop
             Write-Host "Download complete (primary)."
           } catch {
@@ -73,12 +69,11 @@ jobs:
       - name: "05 • Download heissepreise.zip from Release (verification / fallback no-op)"
         if: always()
         run: |
-          # This step is intentionally verbose and non-destructive; if the file exists, we report its size
           if (Test-Path $env:ZIP_NAME) {
             $size = (Get-Item $env:ZIP_NAME).Length
-            Write-Host "$env:ZIP_NAME exists, size: $size bytes"
+            Write-Host ("{0} exists, size: {1} bytes" -f $env:ZIP_NAME, $size)
           } else {
-            Write-Host "$env:ZIP_NAME not found after primary attempt. Attempting a second download..."
+            Write-Host "File not found after primary attempt. Attempting a second download..."
             Invoke-WebRequest -Uri $env:RELEASE_URL -OutFile $env:ZIP_NAME -UseBasicParsing
             Write-Host "Download complete (fallback)."
           }
@@ -88,9 +83,9 @@ jobs:
         run: |
           if (Test-Path $env:ZIP_NAME) {
             $hash = Get-FileHash -Algorithm MD5 $env:ZIP_NAME
-            Write-Host "MD5($env:ZIP_NAME) = $($hash.Hash)"
+            Write-Host ("MD5({0}) = {1}" -f $env:ZIP_NAME, $hash.Hash)
           } else {
-            Write-Host "$env:ZIP_NAME is missing; cannot compute checksum"
+            Write-Host ("{0} is missing; cannot compute checksum" -f $env:ZIP_NAME)
           }
         shell: powershell
 
@@ -98,7 +93,7 @@ jobs:
         id: unzip
         run: |
           if (-not (Test-Path $env:ZIP_NAME)) {
-            Write-Error "Expected $env:ZIP_NAME to exist but it does not — aborting unzip (will still allow workflow to fail in a visible way)."
+            Write-Error ("Expected {0} to exist but it does not — aborting unzip." -f $env:ZIP_NAME)
             exit 1
           }
           Expand-Archive -Path $env:ZIP_NAME -DestinationPath . -Force
@@ -109,25 +104,21 @@ jobs:
       - name: "08 • Install Cloudflare WARP (download + silent MSI install + quick checks)"
         id: install_warp
         run: |
-          # Download WARP installer
-          Write-Host "Downloading WARP MSI from $env:WARP_MSI_URL -> $env:WARP_MSI_NAME"
+          Write-Host ("Downloading WARP MSI from {0} -> {1}" -f $env:WARP_MSI_URL, $env:WARP_MSI_NAME)
           Invoke-WebRequest -Uri $env:WARP_MSI_URL -OutFile $env:WARP_MSI_NAME -UseBasicParsing -ErrorAction Stop
 
-          # Install WARP silently
           Write-Host "Installing WARP (msiexec silent)"
           Start-Process msiexec.exe -ArgumentList '/i', $env:WARP_MSI_NAME, '/quiet', '/norestart' -Wait
 
-          # Small delay to let services initialize
           Start-Sleep -Seconds 10
 
-          # Register and connect using WARP CLI (same sequence as original)
           $warpPath = 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe'
           if (Test-Path $warpPath) {
             & $warpPath --accept-tos registration new
             & $warpPath --accept-tos connect
             & $warpPath --accept-tos status
           } else {
-            Write-Host "warp-cli not found at $warpPath — continuing (this mirrors original behavior expectation)"
+            Write-Host ("warp-cli not found at {0} — continuing" -f $warpPath)
           }
 
           Start-Sleep -Seconds 10
@@ -136,7 +127,7 @@ jobs:
       - name: "09 • Sanity list: heissepreise folder contents before execution"
         run: |
           Write-Host "Listing heissepreise folder:"
-          Get-ChildItem -Path .\heissepreise -Recurse -Depth 1 -ErrorAction SilentlyContinue
+          Get-ChildItem -Path .\heissepreise -Recurse -ErrorAction SilentlyContinue | Select-Object -First 50
         shell: powershell
 
       - name: "10 • Start RemoteExecuteScriptSilent.exe (detached)"
@@ -152,24 +143,24 @@ jobs:
         id: wait_remoteexe
         run: |
           $processName = "RemoteExecuteScriptSilent"
-          Write-Host "Waiting for $processName process to exit..."
+          Write-Host ("Waiting for {0} process to exit..." -f $processName)
           while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
             Start-Sleep -Seconds 5
-            Write-Host "$(Get-Date -Format o) — still waiting for $processName..."
+            Write-Host ("{0} — still waiting for {1}..." -f (Get-Date -Format o), $processName)
           }
-          Write-Host "$processName has exited."
+          Write-Host ("{0} has exited." -f $processName)
         shell: powershell
 
       - name: "12 • Wait for FastExecuteScript.exe to exit (polling)"
         id: wait_fastexe
         run: |
           $processName = "FastExecuteScript"
-          Write-Host "Waiting for $processName process to exit..."
+          Write-Host ("Waiting for {0} process to exit..." -f $processName)
           while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
             Start-Sleep -Seconds 5
-            Write-Host "$(Get-Date -Format o) — still waiting for $processName..."
+            Write-Host ("{0} — still waiting for {1}..." -f (Get-Date -Format o), $processName)
           }
-          Write-Host "$processName has exited."
+          Write-Host ("{0} has exited." -f $processName)
         shell: powershell
 
       - name: "13 • Discover dynamic logs folder (determine environment-specific subfolder)"
@@ -177,23 +168,23 @@ jobs:
         run: |
           $base = "heissepreise\appslocal"
           if (-not (Test-Path $base)) {
-            Write-Error "Expected base path '$base' not found. Aborting with failure so job outcome is obvious."
+            Write-Error ("Expected base path '{0}' not found. Aborting." -f $base)
             exit 1
           }
           $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
           $logsPath = "$base\$dynamic\logs"
-          Write-Host "Detected dynamic folder: $dynamic"
-          Write-Host "Setting logsPath to: $logsPath"
+          Write-Host ("Detected dynamic folder: {0}" -f $dynamic)
+          Write-Host ("Setting logsPath to: {0}" -f $logsPath)
           echo "logsPath=$logsPath" >> $env:GITHUB_ENV
         shell: powershell
 
       - name: "14 • Verify logsPath exists (informational)"
         run: |
           if (Test-Path "${{ env.logsPath }}") {
-            Write-Host "Logs path exists: ${{ env.logsPath }}"
+            Write-Host ("Logs path exists: {0}" -f ${{ env.logsPath }})
             Get-ChildItem -Path "${{ env.logsPath }}" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 20
           } else {
-            Write-Host "Logs path '${{ env.logsPath }}' not found — artifact upload will still run (may be empty)."
+            Write-Host ("Logs path '{0}' not found — artifact upload will still run (may be empty)." -f ${{ env.logsPath }})
           }
         shell: powershell
 
