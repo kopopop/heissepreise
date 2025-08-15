@@ -1,4 +1,4 @@
-name: Complex CI on Windows
+name: Enterprise CI on Windows
 
 on:
   schedule:
@@ -13,28 +13,38 @@ env:
   TEMP_PATH: ${{ github.workspace }}\temp
 
 jobs:
-  setup-matrix:
+  setup:
     runs-on: windows-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      logs_name: ${{ steps.set-logs-name.outputs.logs_name }}
     steps:
-      - name: Emulate matrix
-        id: set-matrix
-        run: echo "::set-output name=matrix::{\"arch\": [\"x64\"]}"
+      - name: Setup Environment Variables
+        id: set-logs-name
+        run: |
+          echo "::set-output name=logs_name::logs"
+        shell: powershell
 
-  run-release:
-    needs: setup-matrix
+      - name: Print Setup Info
+        run: |
+          Write-Host "Setup Complete. All systems go!"
+        shell: powershell
+
+  main:
+    needs: setup
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       max-parallel: 1
-      matrix: ${{fromJson(needs.setup-matrix.outputs.matrix)}}
-    runs-on: windows-latest
+    env:
+      LOGS_NAME: ${{ needs.setup.outputs.logs_name }}
     steps:
-      - name: Print environment info
+      - name: Preflight Checks
         run: |
           Write-Host "Workspace: $env:GITHUB_WORKSPACE"
-          Write-Host "Arch: ${{ matrix.arch }}"
           Write-Host "Log Level: $env:LOG_LEVEL"
+          Write-Host "Logs Name: $env:LOGS_NAME"
+          Write-Host "Temp Path: $env:TEMP_PATH"
+          Write-Host "Starting workflow at $(Get-Date -Format u)"
         shell: powershell
 
       - name: Download heissepreise.zip from Release
@@ -48,15 +58,21 @@ jobs:
           Expand-Archive -Path heissepreise.zip -DestinationPath .
         shell: powershell
 
-      - name: Install Cloudflare WARP
+      - name: Install Cloudflare WARP (with error handling)
         run: |
-          Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "WARP.msi"
-          Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
-          Start-Sleep -Seconds 10
-          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
-          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
-          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
-          Start-Sleep -Seconds 10
+          try {
+            Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "WARP.msi"
+            Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
+            Start-Sleep -Seconds 10
+            & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
+            & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
+            & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
+            Start-Sleep -Seconds 10
+            Write-Host "WARP installed and connected."
+          } catch {
+            Write-Host "Cloudflare WARP install or connect failed!"
+            exit 1
+          }
         shell: powershell
 
       - name: Start RemoteExecuteScriptSilent.exe
@@ -72,7 +88,7 @@ jobs:
           while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
             Start-Sleep -Seconds 5
           }
-          Write-Host "$processName has exited."
+          Write-Host "$processName exited."
         shell: powershell
 
       - name: Wait for FastExecuteScript.exe to exit
@@ -82,38 +98,54 @@ jobs:
           while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
             Start-Sleep -Seconds 5
           }
-          Write-Host "$processName has exited."
+          Write-Host "$processName exited."
         shell: powershell
 
-      - name: Find dynamic logs folder
+      - name: Locate dynamic logs folder
         id: find_logs
         run: |
           $base = "heissepreise\appslocal"
           $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
           $logsPath = "$base\$dynamic\logs"
           echo "logsPath=$logsPath" >> $env:GITHUB_ENV
+          Write-Host "Logs path: $logsPath"
+        shell: powershell
+
+      - name: Archive logs
+        run: |
+          $archive = "$env:TEMP_PATH\logs.zip"
+          Compress-Archive -Path $env:logsPath\* -DestinationPath $archive
+          Write-Host "Logs archived at $archive"
         shell: powershell
 
       - name: Upload logs as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ matrix.arch }}
-          path: ${{ env.logsPath }}/**
+          name: ${{ env.LOGS_NAME }}
+          path: ${{ env.TEMP_PATH }}/logs.zip
 
-      - name: Clean up temp files
+      - name: Publish Workflow Summary
+        run: |
+          $summary = "## CI Run Summary`n"
+          $summary += "Time: $(Get-Date -Format u)`n"
+          $summary += "Logs: [Download](${{ env.TEMP_PATH }}/logs.zip)"
+          echo $summary >> $GITHUB_STEP_SUMMARY
+        shell: powershell
+
+      - name: Cleanup Temp Files
         run: |
           Remove-Item -Path $env:TEMP_PATH -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host "Temporary files cleaned up."
         shell: powershell
 
-  notify:
-    needs: run-release
-    runs-on: windows-latest
-    steps:
-      - name: Notify on success
+      - name: Notify Success
         if: success()
-        run: Write-Host "Workflow completed successfully!"
+        run: |
+          Write-Host "Workflow completed successfully!"
         shell: powershell
-      - name: Notify on failure
+
+      - name: Notify Failure
         if: failure()
-        run: Write-Host "Workflow failed. Please check logs!"
+        run: |
+          Write-Host "Workflow failed. Please check logs!"
         shell: powershell
