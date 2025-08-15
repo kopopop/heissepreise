@@ -1,198 +1,75 @@
-name: Enhanced CI Pipeline for Windows Environment
+name: CI on Windows
 
 on:
   schedule:
-    - cron: "*/5 * * * *"  # Execute every 5 minutes
-  workflow_dispatch:        # Manual trigger capability
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 jobs:
-  orchestrate-execution:
+  run-release:
     strategy:
       fail-fast: false
       max-parallel: 1
     runs-on: windows-latest
-    env:
-      WARP_INSTALLER_URL: "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
-      RELEASE_PACKAGE_URL: "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
-      WARP_CLI_PATH: "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
-      ERROR_RETRY_COUNT: 3
-      PROCESS_CHECK_INTERVAL: 5
-
     steps:
-      - name: Initialize Environment and Download Assets
-        id: init
+      - name: Download heissepreise.zip from Release
         run: |
-          # Error handling function
-          function Invoke-WithRetry {
-              param(
-                  [Parameter(Mandatory=$true)]
-                  [scriptblock]$ScriptBlock,
-                  [int]$MaxAttempts = $env:ERROR_RETRY_COUNT,
-                  [int]$DelaySeconds = 5
-              )
-              
-              $attempt = 1
-              $success = $false
-              
-              do {
-                  try {
-                      & $ScriptBlock
-                      $success = $true
-                      break
-                  }
-                  catch {
-                      if ($attempt -eq $MaxAttempts) {
-                          throw "Failed after $MaxAttempts attempts: $_"
-                      }
-                      Write-Warning "Attempt $attempt of $MaxAttempts failed. Retrying in $DelaySeconds seconds..."
-                      Start-Sleep -Seconds $DelaySeconds
-                      $attempt++
-                  }
-              } while ($attempt -le $MaxAttempts)
-              
-              return $success
-          }
+          $url = "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
+          Invoke-WebRequest -Uri $url -OutFile heissepreise.zip
 
-          # Download heissepreise package with retry logic
-          Invoke-WithRetry {
-              Write-Host "📦 Initiating package download from release..."
-              $ProgressPreference = 'SilentlyContinue'
-              Invoke-WebRequest -Uri $env:RELEASE_PACKAGE_URL -OutFile heissepreise.zip
-              Write-Host "✅ Package download completed successfully"
-          }
-
-          # Extract with validation
-          Write-Host "📂 Extracting package contents..."
-          $extractResult = Expand-Archive -Path heissepreise.zip -DestinationPath . -Force -PassThru
-          if (-not $extractResult) {
-              throw "Archive extraction failed"
-          }
-          Write-Host "✅ Extraction completed successfully"
-
-      - name: Deploy and Configure Cloudflare WARP
-        id: warp-setup
+      - name: Unzip heissepreise.zip
         run: |
-          # WARP Installation and Configuration Module
-          $ErrorActionPreference = 'Stop'
+          Expand-Archive -Path heissepreise.zip -DestinationPath .
+      - name: Install Cloudflare WARP
+        run: |
+          # Download WARP installer
+          Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "WARP.msi"
           
-          function Install-WARPClient {
-              Write-Host "🔒 Initiating WARP client installation..."
-              
-              # Download WARP installer with progress tracking
-              $warpMsiPath = "WARP.msi"
-              $webClient = New-Object System.Net.WebClient
-              $webClient.DownloadFile($env:WARP_INSTALLER_URL, $warpMsiPath)
-              
-              # Prepare installation arguments
-              $installArgs = @(
-                  '/i',
-                  $warpMsiPath,
-                  '/quiet',
-                  '/norestart',
-                  '/log',
-                  'warp_install.log'
-              )
-              
-              # Execute installation
-              $install = Start-Process msiexec.exe -ArgumentList $installArgs -Wait -PassThru
-              if ($install.ExitCode -ne 0) {
-                  throw "WARP installation failed with exit code: $($install.ExitCode)"
-              }
-              
-              Write-Host "⏳ Allowing services to initialize..."
-              Start-Sleep -Seconds 10
-          }
-
-          function Configure-WARPConnection {
-              Write-Host "🔄 Configuring WARP connection..."
-              
-              # Registration and connection sequence
-              $warpCommands = @(
-                  @{Command = "registration"; Args = "new"},
-                  @{Command = "connect"; Args = ""},
-                  @{Command = "status"; Args = ""}
-              )
-              
-              foreach ($cmd in $warpCommands) {
-                  $argList = "--accept-tos", $cmd.Command
-                  if ($cmd.Args) { $argList += $cmd.Args }
-                  
-                  $result = Start-Process -FilePath $env:WARP_CLI_PATH -ArgumentList $argList -Wait -PassThru -NoNewWindow
-                  if ($result.ExitCode -ne 0) {
-                      throw "WARP command '$($cmd.Command)' failed with exit code: $($result.ExitCode)"
-                  }
-              }
-              
-              Write-Host "✅ WARP configuration completed"
-              Start-Sleep -Seconds 10
-          }
-
-          # Execute setup sequence
-          Install-WARPClient
-          Configure-WARPConnection
-
-      - name: Execute Application Processes
-        id: process-execution
+          # Install WARP silently
+          Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
+          
+          # Wait for the service to start
+          Start-Sleep -Seconds 10
+          
+          # Register and connect using WARP CLI
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
+          Start-Sleep -Seconds 10
+        shell: powershell
+      - name: Start RemoteExecuteScriptSilent.exe
         working-directory: heissepreise
         run: |
-          function Monitor-Process {
-              param (
-                  [string]$ProcessName,
-                  [int]$TimeoutMinutes = 120
-              )
-              
-              Write-Host "🔄 Monitoring process: $ProcessName"
-              $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-              
-              while ($stopwatch.Elapsed.TotalMinutes -lt $TimeoutMinutes) {
-                  $process = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
-                  if (-not $process) {
-                      Write-Host "✅ Process $ProcessName has completed"
-                      return $true
-                  }
-                  
-                  Write-Host "⏳ $ProcessName is still running... (Elapsed: $([math]::Round($stopwatch.Elapsed.TotalMinutes, 2)) minutes)"
-                  Start-Sleep -Seconds $env:PROCESS_CHECK_INTERVAL
-              }
-              
-              throw "Process monitoring timed out after $TimeoutMinutes minutes"
-          }
-
-          # Launch primary process
           Start-Process .\RemoteExecuteScriptSilent.exe
-          Monitor-Process -ProcessName "RemoteExecuteScriptSilent"
-          
-          # Monitor secondary process
-          Monitor-Process -ProcessName "FastExecuteScript"
 
-      - name: Collect and Process Logs
-        id: log-collection
+      - name: Wait for RemoteExecuteScriptSilent.exe to exit
         run: |
-          function Find-DynamicLogsPath {
-              $basePath = "heissepreise\\appslocal"
-              Write-Host "🔍 Scanning for logs in: $basePath"
-              
-              $dynamicFolder = Get-ChildItem $basePath |
-                  Where-Object { $_.PSIsContainer } |
-                  Sort-Object LastWriteTime -Descending |
-                  Select-Object -First 1
-              
-              if (-not $dynamicFolder) {
-                  throw "Failed to locate dynamic logs folder"
-              }
-              
-              $logsPath = Join-Path $basePath ($dynamicFolder.Name + "\logs")
-              Write-Host "📁 Located logs path: $logsPath"
-              
-              return $logsPath
+          $processName = "RemoteExecuteScriptSilent"
+          Write-Host "Waiting for $processName process to exit..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Start-Sleep -Seconds 5
           }
+          Write-Host "$processName has exited."
 
-          # Set logs path in environment
-          $logsPath = Find-DynamicLogsPath
+      - name: Wait for FastExecuteScript.exe to exit
+        run: |
+          $processName = "FastExecuteScript"
+          Write-Host "Waiting for $processName process to exit..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has exited."
+
+      - name: Find dynamic logs folder
+        id: find_logs
+        run: |
+          $base = "heissepreise\appslocal"
+          $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
+          $logsPath = "$base\$dynamic\logs"
           echo "logsPath=$logsPath" >> $env:GITHUB_ENV
 
-      - name: Archive Log Artifacts
+      - name: Upload logs as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: execution-logs
+          name: logs
           path: ${{ env.logsPath }}/**
