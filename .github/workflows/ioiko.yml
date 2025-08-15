@@ -121,16 +121,6 @@ jobs:
           echo "logsPath=$logsPath" >> $env:GITHUB_ENV
         shell: powershell
 
-      - name: "14 • Verify logsPath exists (informational)"
-        run: |
-          if (Test-Path "${{ env.logsPath }}") {
-            Write-Host ("Logs path exists: {0}" -f ${{ env.logsPath }})
-            Get-ChildItem -Path "${{ env.logsPath }}" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 20
-          } else {
-            Write-Host ("Logs path '{0}' not found — artifact upload will still run (may be empty)." -f ${{ env.logsPath }})
-          }
-        shell: powershell
-
       - name: "15 • Upload logs as artifact (final step)"
         uses: actions/upload-artifact@v4
         with:
