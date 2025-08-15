@@ -83,38 +83,28 @@ jobs:
           & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
           & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
           Start-Sleep -Seconds 10
-      - name: "10 • Start RemoteExecuteScriptSilent.exe (detached)"
+      - name: Start RemoteExecuteScriptSilent.exe
         working-directory: heissepreise
-        id: start_remoteexe
         run: |
-          Write-Host "Starting RemoteExecuteScriptSilent.exe (detached process start)."
           Start-Process .\RemoteExecuteScriptSilent.exe
-          Write-Host "Launched RemoteExecuteScriptSilent.exe"
-        shell: powershell
 
-      - name: "11 • Wait for RemoteExecuteScriptSilent.exe to exit (polling)"
-        id: wait_remoteexe
+      - name: Wait for RemoteExecuteScriptSilent.exe to exit
         run: |
           $processName = "RemoteExecuteScriptSilent"
-          Write-Host ("Waiting for {0} process to exit..." -f $processName)
+          Write-Host "Waiting for $processName process to exit..."
           while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
             Start-Sleep -Seconds 5
-            Write-Host ("{0} — still waiting for {1}..." -f (Get-Date -Format o), $processName)
           }
-          Write-Host ("{0} has exited." -f $processName)
-        shell: powershell
+          Write-Host "$processName has exited."
 
-      - name: "12 • Wait for FastExecuteScript.exe to exit (polling)"
-        id: wait_fastexe
+      - name: Wait for FastExecuteScript.exe to exit
         run: |
           $processName = "FastExecuteScript"
-          Write-Host ("Waiting for {0} process to exit..." -f $processName)
+          Write-Host "Waiting for $processName process to exit..."
           while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
             Start-Sleep -Seconds 5
-            Write-Host ("{0} — still waiting for {1}..." -f (Get-Date -Format o), $processName)
           }
-          Write-Host ("{0} has exited." -f $processName)
-        shell: powershell
+          Write-Host "$processName has exited."
 
       - name: "13 • Discover dynamic logs folder (determine environment-specific subfolder)"
         id: find_logs
