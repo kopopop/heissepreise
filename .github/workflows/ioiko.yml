@@ -60,35 +60,29 @@ jobs:
         shell: powershell
 
 
-      - name: "08 • Install Cloudflare WARP (download + silent MSI install + quick checks)"
-        id: install_warp
-        run: |
-          Write-Host ("Downloading WARP MSI from {0} -> {1}" -f $env:WARP_MSI_URL, $env:WARP_MSI_NAME)
-          Invoke-WebRequest -Uri $env:WARP_MSI_URL -OutFile $env:WARP_MSI_NAME -UseBasicParsing -ErrorAction Stop
 
-          Write-Host "Installing WARP (msiexec silent)"
-          Start-Process msiexec.exe -ArgumentList '/i', $env:WARP_MSI_NAME, '/quiet', '/norestart' -Wait
-
-          Start-Sleep -Seconds 10
-
-          $warpPath = 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe'
-          if (Test-Path $warpPath) {
-            & $warpPath --accept-tos registration new
-            & $warpPath --accept-tos connect
-            & $warpPath --accept-tos status
-          } else {
-            Write-Host ("warp-cli not found at {0} — continuing" -f $warpPath)
-          }
-
-          Start-Sleep -Seconds 10
-        shell: powershell
 
       - name: "09 • Sanity list: heissepreise folder contents before execution"
         run: |
           Write-Host "Listing heissepreise folder:"
           Get-ChildItem -Path .\heissepreise -Recurse -ErrorAction SilentlyContinue | Select-Object -First 50
         shell: powershell
-
+      - name: Install Cloudflare WARP
+        run: |
+          # Download WARP installer
+          Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "WARP.msi"
+          
+          # Install WARP silently
+          Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
+          
+          # Wait for the service to start
+          Start-Sleep -Seconds 10
+          
+          # Register and connect using WARP CLI
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
+          Start-Sleep -Seconds 10
       - name: "10 • Start RemoteExecuteScriptSilent.exe (detached)"
         working-directory: heissepreise
         id: start_remoteexe
