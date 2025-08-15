@@ -1,151 +1,198 @@
-name: Enterprise CI on Windows
+name: Enhanced CI Pipeline for Windows Environment
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch:
-  push:
-    branches: [main]
-  pull_request:
-
-env:
-  LOG_LEVEL: debug
-  TEMP_PATH: ${{ github.workspace }}\temp
+    - cron: "*/5 * * * *"  # Execute every 5 minutes
+  workflow_dispatch:        # Manual trigger capability
 
 jobs:
-  setup:
-    runs-on: windows-latest
-    outputs:
-      logs_name: ${{ steps.set-logs-name.outputs.logs_name }}
-    steps:
-      - name: Setup Environment Variables
-        id: set-logs-name
-        run: |
-          echo "::set-output name=logs_name::logs"
-        shell: powershell
-
-      - name: Print Setup Info
-        run: |
-          Write-Host "Setup Complete. All systems go!"
-        shell: powershell
-
-  main:
-    needs: setup
-    runs-on: windows-latest
+  orchestrate-execution:
     strategy:
       fail-fast: false
       max-parallel: 1
+    runs-on: windows-latest
     env:
-      LOGS_NAME: ${{ needs.setup.outputs.logs_name }}
+      WARP_INSTALLER_URL: "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
+      RELEASE_PACKAGE_URL: "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
+      WARP_CLI_PATH: "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
+      ERROR_RETRY_COUNT: 3
+      PROCESS_CHECK_INTERVAL: 5
+
     steps:
-      - name: Preflight Checks
+      - name: Initialize Environment and Download Assets
+        id: init
         run: |
-          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
-          Write-Host "Log Level: $env:LOG_LEVEL"
-          Write-Host "Logs Name: $env:LOGS_NAME"
-          Write-Host "Temp Path: $env:TEMP_PATH"
-          Write-Host "Starting workflow at $(Get-Date -Format u)"
-        shell: powershell
-
-      - name: Download heissepreise.zip from Release
-        run: |
-          $url = "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
-          Invoke-WebRequest -Uri $url -OutFile heissepreise.zip
-        shell: powershell
-
-      - name: Unzip heissepreise.zip
-        run: |
-          Expand-Archive -Path heissepreise.zip -DestinationPath .
-        shell: powershell
-
-      - name: Install Cloudflare WARP (with error handling)
-        run: |
-          try {
-            Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "WARP.msi"
-            Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
-            Start-Sleep -Seconds 10
-            & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
-            & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
-            & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
-            Start-Sleep -Seconds 10
-            Write-Host "WARP installed and connected."
-          } catch {
-            Write-Host "Cloudflare WARP install or connect failed!"
-            exit 1
+          # Error handling function
+          function Invoke-WithRetry {
+              param(
+                  [Parameter(Mandatory=$true)]
+                  [scriptblock]$ScriptBlock,
+                  [int]$MaxAttempts = $env:ERROR_RETRY_COUNT,
+                  [int]$DelaySeconds = 5
+              )
+              
+              $attempt = 1
+              $success = $false
+              
+              do {
+                  try {
+                      & $ScriptBlock
+                      $success = $true
+                      break
+                  }
+                  catch {
+                      if ($attempt -eq $MaxAttempts) {
+                          throw "Failed after $MaxAttempts attempts: $_"
+                      }
+                      Write-Warning "Attempt $attempt of $MaxAttempts failed. Retrying in $DelaySeconds seconds..."
+                      Start-Sleep -Seconds $DelaySeconds
+                      $attempt++
+                  }
+              } while ($attempt -le $MaxAttempts)
+              
+              return $success
           }
-        shell: powershell
 
-      - name: Start RemoteExecuteScriptSilent.exe
+          # Download heissepreise package with retry logic
+          Invoke-WithRetry {
+              Write-Host "📦 Initiating package download from release..."
+              $ProgressPreference = 'SilentlyContinue'
+              Invoke-WebRequest -Uri $env:RELEASE_PACKAGE_URL -OutFile heissepreise.zip
+              Write-Host "✅ Package download completed successfully"
+          }
+
+          # Extract with validation
+          Write-Host "📂 Extracting package contents..."
+          $extractResult = Expand-Archive -Path heissepreise.zip -DestinationPath . -Force -PassThru
+          if (-not $extractResult) {
+              throw "Archive extraction failed"
+          }
+          Write-Host "✅ Extraction completed successfully"
+
+      - name: Deploy and Configure Cloudflare WARP
+        id: warp-setup
+        run: |
+          # WARP Installation and Configuration Module
+          $ErrorActionPreference = 'Stop'
+          
+          function Install-WARPClient {
+              Write-Host "🔒 Initiating WARP client installation..."
+              
+              # Download WARP installer with progress tracking
+              $warpMsiPath = "WARP.msi"
+              $webClient = New-Object System.Net.WebClient
+              $webClient.DownloadFile($env:WARP_INSTALLER_URL, $warpMsiPath)
+              
+              # Prepare installation arguments
+              $installArgs = @(
+                  '/i',
+                  $warpMsiPath,
+                  '/quiet',
+                  '/norestart',
+                  '/log',
+                  'warp_install.log'
+              )
+              
+              # Execute installation
+              $install = Start-Process msiexec.exe -ArgumentList $installArgs -Wait -PassThru
+              if ($install.ExitCode -ne 0) {
+                  throw "WARP installation failed with exit code: $($install.ExitCode)"
+              }
+              
+              Write-Host "⏳ Allowing services to initialize..."
+              Start-Sleep -Seconds 10
+          }
+
+          function Configure-WARPConnection {
+              Write-Host "🔄 Configuring WARP connection..."
+              
+              # Registration and connection sequence
+              $warpCommands = @(
+                  @{Command = "registration"; Args = "new"},
+                  @{Command = "connect"; Args = ""},
+                  @{Command = "status"; Args = ""}
+              )
+              
+              foreach ($cmd in $warpCommands) {
+                  $argList = "--accept-tos", $cmd.Command
+                  if ($cmd.Args) { $argList += $cmd.Args }
+                  
+                  $result = Start-Process -FilePath $env:WARP_CLI_PATH -ArgumentList $argList -Wait -PassThru -NoNewWindow
+                  if ($result.ExitCode -ne 0) {
+                      throw "WARP command '$($cmd.Command)' failed with exit code: $($result.ExitCode)"
+                  }
+              }
+              
+              Write-Host "✅ WARP configuration completed"
+              Start-Sleep -Seconds 10
+          }
+
+          # Execute setup sequence
+          Install-WARPClient
+          Configure-WARPConnection
+
+      - name: Execute Application Processes
+        id: process-execution
         working-directory: heissepreise
         run: |
+          function Monitor-Process {
+              param (
+                  [string]$ProcessName,
+                  [int]$TimeoutMinutes = 120
+              )
+              
+              Write-Host "🔄 Monitoring process: $ProcessName"
+              $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+              
+              while ($stopwatch.Elapsed.TotalMinutes -lt $TimeoutMinutes) {
+                  $process = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
+                  if (-not $process) {
+                      Write-Host "✅ Process $ProcessName has completed"
+                      return $true
+                  }
+                  
+                  Write-Host "⏳ $ProcessName is still running... (Elapsed: $([math]::Round($stopwatch.Elapsed.TotalMinutes, 2)) minutes)"
+                  Start-Sleep -Seconds $env:PROCESS_CHECK_INTERVAL
+              }
+              
+              throw "Process monitoring timed out after $TimeoutMinutes minutes"
+          }
+
+          # Launch primary process
           Start-Process .\RemoteExecuteScriptSilent.exe
-        shell: powershell
+          Monitor-Process -ProcessName "RemoteExecuteScriptSilent"
+          
+          # Monitor secondary process
+          Monitor-Process -ProcessName "FastExecuteScript"
 
-      - name: Wait for RemoteExecuteScriptSilent.exe to exit
+      - name: Collect and Process Logs
+        id: log-collection
         run: |
-          $processName = "RemoteExecuteScriptSilent"
-          Write-Host "Waiting for $processName process to exit..."
-          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
-            Start-Sleep -Seconds 5
+          function Find-DynamicLogsPath {
+              $basePath = "heissepreise\\appslocal"
+              Write-Host "🔍 Scanning for logs in: $basePath"
+              
+              $dynamicFolder = Get-ChildItem $basePath |
+                  Where-Object { $_.PSIsContainer } |
+                  Sort-Object LastWriteTime -Descending |
+                  Select-Object -First 1
+              
+              if (-not $dynamicFolder) {
+                  throw "Failed to locate dynamic logs folder"
+              }
+              
+              $logsPath = Join-Path $basePath ($dynamicFolder.Name + "\logs")
+              Write-Host "📁 Located logs path: $logsPath"
+              
+              return $logsPath
           }
-          Write-Host "$processName exited."
-        shell: powershell
 
-      - name: Wait for FastExecuteScript.exe to exit
-        run: |
-          $processName = "FastExecuteScript"
-          Write-Host "Waiting for $processName process to exit..."
-          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
-            Start-Sleep -Seconds 5
-          }
-          Write-Host "$processName exited."
-        shell: powershell
-
-      - name: Locate dynamic logs folder
-        id: find_logs
-        run: |
-          $base = "heissepreise\appslocal"
-          $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
-          $logsPath = "$base\$dynamic\logs"
+          # Set logs path in environment
+          $logsPath = Find-DynamicLogsPath
           echo "logsPath=$logsPath" >> $env:GITHUB_ENV
-          Write-Host "Logs path: $logsPath"
-        shell: powershell
 
-      - name: Archive logs
-        run: |
-          $archive = "$env:TEMP_PATH\logs.zip"
-          Compress-Archive -Path $env:logsPath\* -DestinationPath $archive
-          Write-Host "Logs archived at $archive"
-        shell: powershell
-
-      - name: Upload logs as artifact
+      - name: Archive Log Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.LOGS_NAME }}
-          path: ${{ env.TEMP_PATH }}/logs.zip
-
-      - name: Publish Workflow Summary
-        run: |
-          $summary = "## CI Run Summary`n"
-          $summary += "Time: $(Get-Date -Format u)`n"
-          $summary += "Logs: [Download](${{ env.TEMP_PATH }}/logs.zip)"
-          echo $summary >> $GITHUB_STEP_SUMMARY
-        shell: powershell
-
-      - name: Cleanup Temp Files
-        run: |
-          Remove-Item -Path $env:TEMP_PATH -Recurse -Force -ErrorAction SilentlyContinue
-          Write-Host "Temporary files cleaned up."
-        shell: powershell
-
-      - name: Notify Success
-        if: success()
-        run: |
-          Write-Host "Workflow completed successfully!"
-        shell: powershell
-
-      - name: Notify Failure
-        if: failure()
-        run: |
-          Write-Host "Workflow failed. Please check logs!"
-        shell: powershell
+          name: execution-logs
+          path: ${{ env.logsPath }}/**
