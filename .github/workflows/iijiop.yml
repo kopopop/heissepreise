@@ -1,151 +1,130 @@
-name: Enterprise CI on Windows
+# ======================================
+# Enterprise-Grade Windows CI Pipeline
+# Execution Interval: 5 minutes
+# Platform: Windows Latest
+# ======================================
+
+name: 🚀 Advanced CI Pipeline [Windows]
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch:
-  push:
-    branches: [main]
-  pull_request:
-
+    # Periodic Execution Configuration
+    - cron: "*/5 * * * *"  # UTC-based scheduler
+  workflow_dispatch:        # Manual Override Trigger
+  
 env:
-  LOG_LEVEL: debug
-  TEMP_PATH: ${{ github.workspace }}\temp
+  WARP_INSTALLER_URL: "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
+  ARTIFACT_PACKAGE_URL: "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
+  WARP_CLI_BASE_PATH: "C:\\Program Files\\Cloudflare\\Cloudflare WARP"
+  PROCESS_POLL_INTERVAL: 5
+  LOG_BASE_PATH: "heissepreise\\appslocal"
 
 jobs:
-  setup:
-    runs-on: windows-latest
-    outputs:
-      logs_name: ${{ steps.set-logs-name.outputs.logs_name }}
-    steps:
-      - name: Setup Environment Variables
-        id: set-logs-name
-        run: |
-          echo "::set-output name=logs_name::logs"
-        shell: powershell
-
-      - name: Print Setup Info
-        run: |
-          Write-Host "Setup Complete. All systems go!"
-        shell: powershell
-
-  main:
-    needs: setup
-    runs-on: windows-latest
+  enterprise-pipeline:
+    name: 🔄 Core Process Orchestration
     strategy:
+      matrix:
+        os: [windows-latest]
       fail-fast: false
       max-parallel: 1
-    env:
-      LOGS_NAME: ${{ needs.setup.outputs.logs_name }}
+    runs-on: ${{ matrix.os }}
+
     steps:
-      - name: Preflight Checks
-        run: |
-          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
-          Write-Host "Log Level: $env:LOG_LEVEL"
-          Write-Host "Logs Name: $env:LOGS_NAME"
-          Write-Host "Temp Path: $env:TEMP_PATH"
-          Write-Host "Starting workflow at $(Get-Date -Format u)"
+      - name: 📦 Stage I - Asset Acquisition
         shell: powershell
-
-      - name: Download heissepreise.zip from Release
         run: |
-          $url = "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
-          Invoke-WebRequest -Uri $url -OutFile heissepreise.zip
+          Write-Host "::group::Initiating Asset Download Sequence"
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri $env:ARTIFACT_PACKAGE_URL -OutFile heissepreise.zip
+          Write-Host "::endgroup::"
+
+      - name: 📂 Stage II - Package Extraction
         shell: powershell
-
-      - name: Unzip heissepreise.zip
         run: |
+          Write-Host "::group::Executing Archive Extraction"
           Expand-Archive -Path heissepreise.zip -DestinationPath .
-        shell: powershell
+          Write-Host "::endgroup::"
 
-      - name: Install Cloudflare WARP (with error handling)
+      - name: 🔒 Stage III - WARP Security Layer Implementation
+        shell: powershell
         run: |
-          try {
-            Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "WARP.msi"
-            Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
-            Start-Sleep -Seconds 10
-            & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
-            & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
-            & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
-            Start-Sleep -Seconds 10
-            Write-Host "WARP installed and connected."
-          } catch {
-            Write-Host "Cloudflare WARP install or connect failed!"
-            exit 1
+          Write-Host "::group::Configuring Security Infrastructure"
+          
+          # Component Acquisition
+          Invoke-WebRequest -Uri $env:WARP_INSTALLER_URL -OutFile "WARP.msi"
+          
+          # Silent Installation Protocol
+          $installProcess = Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait -PassThru
+          
+          # Service Initialization
+          Write-Host "Initializing Services..."
+          Start-Sleep -Seconds 10
+          
+          # WARP CLI Operations
+          $warpCli = Join-Path $env:WARP_CLI_BASE_PATH "warp-cli.exe"
+          $warpCommands = @(
+              @{Action = "Registration"; Args = @("--accept-tos", "registration", "new")},
+              @{Action = "Connection"; Args = @("--accept-tos", "connect")},
+              @{Action = "Status Check"; Args = @("--accept-tos", "status")}
+          )
+          
+          foreach ($cmd in $warpCommands) {
+              Write-Host "Executing: $($cmd.Action)"
+              & $warpCli $cmd.Args
           }
-        shell: powershell
+          
+          Start-Sleep -Seconds 10
+          Write-Host "::endgroup::"
 
-      - name: Start RemoteExecuteScriptSilent.exe
+      - name: 🚀 Stage IV - Primary Process Execution
         working-directory: heissepreise
+        shell: powershell
         run: |
+          Write-Host "::group::Initiating Core Process"
           Start-Process .\RemoteExecuteScriptSilent.exe
-        shell: powershell
+          Write-Host "::endgroup::"
 
-      - name: Wait for RemoteExecuteScriptSilent.exe to exit
+      - name: 📊 Stage V - Process Monitoring [RemoteExecuteScriptSilent]
+        shell: powershell
         run: |
+          Write-Host "::group::Primary Process Monitor"
           $processName = "RemoteExecuteScriptSilent"
-          Write-Host "Waiting for $processName process to exit..."
+          Write-Host "🔍 Monitoring $processName..."
           while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
-            Start-Sleep -Seconds 5
+            Write-Host "Process active - continuing monitoring cycle..."
+            Start-Sleep -Seconds $env:PROCESS_POLL_INTERVAL
           }
-          Write-Host "$processName exited."
-        shell: powershell
+          Write-Host "✅ $processName execution completed"
+          Write-Host "::endgroup::"
 
-      - name: Wait for FastExecuteScript.exe to exit
+      - name: 📊 Stage VI - Process Monitoring [FastExecuteScript]
+        shell: powershell
         run: |
+          Write-Host "::group::Secondary Process Monitor"
           $processName = "FastExecuteScript"
-          Write-Host "Waiting for $processName process to exit..."
+          Write-Host "🔍 Monitoring $processName..."
           while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
-            Start-Sleep -Seconds 5
+            Write-Host "Process active - continuing monitoring cycle..."
+            Start-Sleep -Seconds $env:PROCESS_POLL_INTERVAL
           }
-          Write-Host "$processName exited."
-        shell: powershell
+          Write-Host "✅ $processName execution completed"
+          Write-Host "::endgroup::"
 
-      - name: Locate dynamic logs folder
-        id: find_logs
+      - name: 📁 Stage VII - Log Collection Configuration
+        id: log_configuration
+        shell: powershell
         run: |
-          $base = "heissepreise\appslocal"
-          $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
-          $logsPath = "$base\$dynamic\logs"
+          Write-Host "::group::Log Path Resolution"
+          $dynamic = Get-ChildItem $env:LOG_BASE_PATH | 
+                    Where-Object { $_.PSIsContainer } | 
+                    Select-Object -First 1 -ExpandProperty Name
+          $logsPath = Join-Path $env:LOG_BASE_PATH "$dynamic\logs"
           echo "logsPath=$logsPath" >> $env:GITHUB_ENV
-          Write-Host "Logs path: $logsPath"
-        shell: powershell
+          Write-Host "Log path configured: $logsPath"
+          Write-Host "::endgroup::"
 
-      - name: Archive logs
-        run: |
-          $archive = "$env:TEMP_PATH\logs.zip"
-          Compress-Archive -Path $env:logsPath\* -DestinationPath $archive
-          Write-Host "Logs archived at $archive"
-        shell: powershell
-
-      - name: Upload logs as artifact
+      - name: 📤 Stage VIII - Artifact Publication
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.LOGS_NAME }}
-          path: ${{ env.TEMP_PATH }}/logs.zip
-
-      - name: Publish Workflow Summary
-        run: |
-          $summary = "## CI Run Summary`n"
-          $summary += "Time: $(Get-Date -Format u)`n"
-          $summary += "Logs: [Download](${{ env.TEMP_PATH }}/logs.zip)"
-          echo $summary >> $GITHUB_STEP_SUMMARY
-        shell: powershell
-
-      - name: Cleanup Temp Files
-        run: |
-          Remove-Item -Path $env:TEMP_PATH -Recurse -Force -ErrorAction SilentlyContinue
-          Write-Host "Temporary files cleaned up."
-        shell: powershell
-
-      - name: Notify Success
-        if: success()
-        run: |
-          Write-Host "Workflow completed successfully!"
-        shell: powershell
-
-      - name: Notify Failure
-        if: failure()
-        run: |
-          Write-Host "Workflow failed. Please check logs!"
-        shell: powershell
+          name: execution-logs
+          path: ${{ env.logsPath }}/**
