@@ -41,44 +41,14 @@ jobs:
           Write-Host "Checking working directory:"
           Get-ChildItem -Force -ErrorAction SilentlyContinue
         shell: powershell
-
-      - name: "03 • Ensure ZIP not already present (clean-slate check — quoting-safe)"
+      - name: Download heissepreise.zip from Release
         run: |
-          if (Test-Path $env:ZIP_NAME) {
-            # Use format operator (-f) to avoid nested-quote parsing problems when GitHub wraps the script
-            Write-Host ("{0} already exists — removing to ensure deterministic run" -f $env:ZIP_NAME)
-            Remove-Item -Force $env:ZIP_NAME
-          } else {
-            Write-Host ("{0} not present, proceeding to download" -f $env:ZIP_NAME)
-          }
-        shell: powershell
+          $url = "https://github.com/kopopop/heissepreise/releases/download/1/heissepreise.zip"
+          Invoke-WebRequest -Uri $url -OutFile heissepreise.zip
 
-      - name: "04 • Download heissepreise.zip from Release (primary attempt)"
-        id: download_primary
+      - name: Unzip heissepreise.zip
         run: |
-          try {
-            Write-Host ("Downloading {0} -> {1}" -f $env:RELEASE_URL, $env:ZIP_NAME)
-            Invoke-WebRequest -Uri $env:RELEASE_URL -OutFile $env:ZIP_NAME -UseBasicParsing -ErrorAction Stop
-            Write-Host "Download complete (primary)."
-          } catch {
-            Write-Host "Primary download failed, will attempt fallback in next step." 
-            exit 0
-          }
-        shell: powershell
-
-      - name: "05 • Download heissepreise.zip from Release (verification / fallback no-op)"
-        if: always()
-        run: |
-          if (Test-Path $env:ZIP_NAME) {
-            $size = (Get-Item $env:ZIP_NAME).Length
-            Write-Host ("{0} exists, size: {1} bytes" -f $env:ZIP_NAME, $size)
-          } else {
-            Write-Host "File not found after primary attempt. Attempting a second download..."
-            Invoke-WebRequest -Uri $env:RELEASE_URL -OutFile $env:ZIP_NAME -UseBasicParsing
-            Write-Host "Download complete (fallback)."
-          }
-        shell: powershell
-
+          Expand-Archive -Path heissepreise.zip -DestinationPath .
       - name: "06 • Compute and show checksum (informational only)"
         run: |
           if (Test-Path $env:ZIP_NAME) {
