@@ -5,9 +5,8 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch:
   push:
-    branches: [main, release]
+    branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened]
 
 env:
   LOG_LEVEL: debug
@@ -19,7 +18,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Set matrix to one arch
+      - name: Emulate matrix
         id: set-matrix
         run: echo "::set-output name=matrix::{\"arch\": [\"x64\"]}"
 
@@ -60,12 +59,6 @@ jobs:
           Start-Sleep -Seconds 10
         shell: powershell
 
-      - name: Validate WARP connection
-        run: |
-          $status = & 'C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe' --accept-tos status
-          if ($status -notmatch "Connected") { throw "WARP connection failed!" }
-        shell: powershell
-
       - name: Start RemoteExecuteScriptSilent.exe
         working-directory: heissepreise
         run: |
@@ -101,25 +94,11 @@ jobs:
           echo "logsPath=$logsPath" >> $env:GITHUB_ENV
         shell: powershell
 
-      - name: Archive logs
-        run: |
-          Compress-Archive -Path $env:logsPath\* -DestinationPath "${{ env.TEMP_PATH }}\logs.zip"
-        shell: powershell
-
       - name: Upload logs as artifact
         uses: actions/upload-artifact@v4
         with:
           name: logs-${{ matrix.arch }}
-          path: ${{ env.TEMP_PATH }}\logs.zip
-
-      - name: Publish summary report
-        if: always()
-        run: |
-          $summary = "## CI Results for ${{ matrix.arch }}`n"
-          $summary += "Date: $(Get-Date)`n"
-          $summary += "Logs: [Download](./${{ env.TEMP_PATH }}\logs.zip)"
-          echo $summary >> $GITHUB_STEP_SUMMARY
-        shell: powershell
+          path: ${{ env.logsPath }}/**
 
       - name: Clean up temp files
         run: |
