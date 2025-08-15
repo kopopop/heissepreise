@@ -59,17 +59,6 @@ jobs:
           }
         shell: powershell
 
-      - name: "07 • Unzip heissepreise.zip"
-        id: unzip
-        run: |
-          if (-not (Test-Path $env:ZIP_NAME)) {
-            Write-Error ("Expected {0} to exist but it does not — aborting unzip." -f $env:ZIP_NAME)
-            exit 1
-          }
-          Expand-Archive -Path $env:ZIP_NAME -DestinationPath . -Force
-          Write-Host "Unzip complete: contents of ./heissepreise (if present) follow:"
-          Get-ChildItem -Path .\heissepreise -Force -ErrorAction SilentlyContinue
-        shell: powershell
 
       - name: "08 • Install Cloudflare WARP (download + silent MSI install + quick checks)"
         id: install_warp
